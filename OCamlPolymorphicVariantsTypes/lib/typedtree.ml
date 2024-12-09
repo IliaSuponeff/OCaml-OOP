@@ -25,6 +25,7 @@ type scheme = S of binder_set * ty [@@deriving show { with_path = false }]
 let ty_int = TPrim "int"
 let ty_bool = TPrim "bool"
 let ty_string = TPrim "string"
+let ty_unit = TPrim "unit"
 let ty_arrow l r = TArrow (l, r)
 let ty_var v = TVar v
 let ty_tuple t = TTuple t
