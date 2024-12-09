@@ -257,3 +257,56 @@ let instantiate : scheme -> ty R.t =
     bs
     (return t)
 ;;
+
+let generalize env ty =
+  let free = VarSet.diff (Type.free_vars ty) (TypeEnv.free_vars env) in
+  S (free, ty)
+;;
+let rec infer_expr env expr =
+  match expr with
+  | Const (IntLiteral _) ->
+    return (ty_int, Subst.empty)
+  | Const (BoolLiteral _) ->
+    return (ty_bool, Subst.empty)
+    | Const (UnitLiteral _) ->
+      return (ty_unit, Subst.empty)
+  | Variable x ->
+    (match TypeEnv.find x env with
+     | Some scheme ->
+       let* inst = instantiate scheme in
+       return (inst, Subst.empty)
+     | None -> fail (`No_variable x))
+  | Lambda (params, body) ->
+    let* param_types =
+      RList.fold_left params ~init:(return []) ~f:(fun acc param ->
+        let* tv = fresh_var in
+        return ((param, tv) :: acc))
+    in
+    let env_with_params =
+      List.fold_left param_types ~init:env ~f:(fun env (param, t) ->
+        match param with
+        | PVar name -> TypeEnv.extend env name (S (VarSet.empty, t))
+        | _ -> env) (**)
+    in
+    let* (body_type, body_subst) = infer_expr env_with_params body in
+    let param_type_list = List.map ~f:snd param_types in
+    let lambda_type = List.fold_right param_type_list ~init:body_type ~f:(fun t acc ->
+      TArrow (t, acc))
+    in
+    return (lambda_type, body_subst)
+  | _ -> failwith "Not implemented"
+
+  let infer_str_item env = function
+  | _ -> failwith "TODO"
+;;
+
+let infer p = 
+  List.fold_left
+  ~f:(fun acc item ->
+    let* env = acc in
+    let* env = infer_str_item env item in
+    return env)
+  ~init:(return TypeEnv.empty)
+  p
+
+let infer_run p = run (infer p)
