@@ -3,10 +3,10 @@ type binder = int [@@deriving show { with_path = false }]
 module VarSet = struct
   include Stdlib.Set.Make (Int)
 
-  let pp ppf s =
-    Format.fprintf ppf "[ ";
-    iter (Format.fprintf ppf "%d; ") s;
-    Format.fprintf ppf "]"
+  let pp fmt s =
+    Format.fprintf fmt "[ ";
+    iter (Format.fprintf fmt "%d; ") s;
+    Format.fprintf fmt "]"
   ;;
 end
 

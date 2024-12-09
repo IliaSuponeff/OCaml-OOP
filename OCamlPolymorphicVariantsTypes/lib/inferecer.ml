@@ -36,9 +36,17 @@ module R : sig
     val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
   end
 
-  (* module RList : sig
-     val fold_left : 'a list -> init:'b t -> f:('b -> 'a -> 'b t) -> 'b t
-     end *)
+  module RList : sig
+    val fold_left : 'a list -> init:'b t -> f:('b -> 'a -> 'b t) -> 'b t
+  end
+
+  module RMap : sig
+    val fold
+      :  ('k, 'v, 'cmp) Base.Map.t
+      -> init:'b t
+      -> f:('k -> 'v -> 'b -> 'b t)
+      -> 'b t
+  end
 
   (** Creation of a fresh name from internal state *)
   val fresh : int t
@@ -72,14 +80,23 @@ end = struct
     let ( let* ) x f = bind x ~f
   end
 
-  (* module RList = struct
-     let fold_left xs ~init ~f =
-     Base.List.fold_left xs ~init ~f:(fun acc x ->
-     let open Syntax in
-     let* acc = acc in
-     f acc x)
-     ;;
-     end *)
+  module RList = struct
+    let fold_left xs ~init ~f =
+      Base.List.fold_left xs ~init ~f:(fun acc x ->
+        let open Syntax in
+        let* acc = acc in
+        f acc x)
+    ;;
+  end
+
+  module RMap = struct
+    let fold xs ~init ~f =
+      Map.fold xs ~init ~f:(fun ~key ~data acc ->
+        let open Syntax in
+        let* acc = acc in
+        f key data acc)
+    ;;
+  end
 
   let fresh : int t = fun last -> last + 1, Result.Ok last
   let run m = snd (m 0)
@@ -121,15 +138,13 @@ module Subst : sig
   val unify : ty -> ty -> t R.t
   val compose : t -> t -> t R.t
   val compose_all : t list -> t R.t
+  (* val pp : Format.formatter -> (ty, ty, Base.Int.comparator_witness) Base.Map.t -> unit *)
 end = struct
   open R
   open R.Syntax
-  open Base
 
-  (* replace this in context*)
   type t = (fresh, ty, Int.comparator_witness) Map.t
 
-  let empty = Map.empty (module Int)
   let empty = Map.empty (module Int)
   let mapping k v = if Type.occurs_in k v then fail `Occurs_check else return (k, v)
 
@@ -141,7 +156,62 @@ end = struct
   let find s k = Map.find s k
   let remove s k = Map.remove s k
 
-  (* TODO: other *)
+  let apply s =
+    let rec helper = function
+      | TVar v as ty ->
+        (match find s v with
+         | Some ty' -> helper ty'
+         | None -> ty)
+      | TArrow (l, r) -> TArrow (helper l, helper r)
+      | TTuple tl -> ty_tuple (List.map ~f:helper tl)
+      | TList l -> ty_list (helper l)
+      | TPrim _ as ty -> ty
+    in
+    helper
+  ;;
+
+  let rec unify l r =
+    match l, r with
+    | TPrim l, TPrim r when String.equal l r -> return empty
+    | TVar l, TVar r when l = r -> return empty
+    | TVar v, t | t, TVar v -> singleton v t
+    | TArrow (l1, r1), TArrow (l2, r2) ->
+      let* s1 = unify l1 l2 in
+      let* s2 = unify (apply s1 r1) (apply s1 r2) in
+      compose s1 s2
+    | TTuple t1, TTuple t2 ->
+      if List.length t1 <> List.length t2
+      then fail (`Unification_failed (l, r))
+      else
+        let* s =
+          RList.fold_left (List.zip_exn t1 t2) ~init:(return empty) ~f:(fun acc (l, r) ->
+            let* u = unify (apply acc l) (apply acc r) in
+            compose acc u)
+        in
+        return s
+    | TList l1, TList l2 -> unify l1 l2
+    | _, _ -> fail (`Unification_failed (l, r))
+
+  and extend k v s =
+    match find s k with
+    | None ->
+      let v = apply s v in
+      let* s2 = singleton k v in
+      RMap.fold s ~init:(return s2) ~f:(fun k v acc ->
+        let v = apply s2 v in
+        let* k, v = mapping k v in
+        return (Map.update acc k ~f:(fun _ -> v)))
+    | Some v2 ->
+      let* s2 = unify v v2 in
+      compose s s2
+
+  and compose s1 s2 = RMap.fold s2 ~init:(return s1) ~f:extend
+
+  let compose_all ss =
+    List.fold_left ss ~init:(return empty) ~f:(fun acc s ->
+      let* acc = acc in
+      compose acc s)
+  ;;
 end
 
 module Scheme = struct
@@ -156,12 +226,18 @@ module Scheme = struct
   ;;
 end
 
-(* TODO: instantiation, generalization, inference *)
+module TypeEnv = struct
+  type t = (identifier, scheme, String.comparator_witness) Map.t
 
-(* TODO: run *)
-let run code =
-  match Parser.program_parser code with
-  | ParseSuccess (program, parser_state) -> Format.printf ""
-  | ParseError (msg, parser_state) -> Format.printf "pe"
-  | ParseFail -> Format.printf "pf"
-;;
+  let extend e k v = Map.update e k ~f:(fun _ -> v)
+  let remove e k = Map.remove e k
+  let empty = Map.empty (module String)
+
+  let free_vars : t -> VarSet.t =
+    Map.fold ~init:VarSet.empty ~f:(fun ~key:_ ~data:s acc ->
+      VarSet.union acc (Scheme.free_vars s))
+  ;;
+
+  let apply s env = Map.map env ~f:(Scheme.apply s)
+  let find x env = Map.find env x
+end
