@@ -4,7 +4,6 @@
 
 open Parser
 open Ast
-open Stdlib
 open Typedtree
 open Base
 open Format
@@ -241,3 +240,20 @@ module TypeEnv = struct
   let apply s env = Map.map env ~f:(Scheme.apply s)
   let find x env = Map.find env x
 end
+
+open R
+open R.Syntax
+
+let fresh_var = fresh >>| fun n -> TVar n
+
+let instantiate : scheme -> ty R.t =
+  fun (S (bs, t)) ->
+  VarSet.fold
+    (fun name typ ->
+      let* typ = typ in
+      let* f1 = fresh_var in
+      let* s = Subst.singleton name f1 in
+      return (Subst.apply s typ))
+    bs
+    (return t)
+;;
